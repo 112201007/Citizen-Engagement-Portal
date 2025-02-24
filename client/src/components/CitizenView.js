@@ -86,7 +86,7 @@ const CitizenView = () => {
 
   const fetchIssues = async () => {
     try {
-      const response = await axios.get('http://localhost:5000/api/issues/all');
+      const response = await axios.get('http://localhost:5000/issues');
       setIssues(response.data);
     } catch (error) {
       console.error('Error fetching issues:', error);
@@ -95,7 +95,7 @@ const CitizenView = () => {
 
   const handleReportIssue = async () => {
     try {
-      const response = await axios.post('http://localhost:5000/api/issues/report', {
+      const response = await axios.post('http://localhost:5000/report', {
         userId: 1, // Replace with actual user ID
         issueType,
         location,
