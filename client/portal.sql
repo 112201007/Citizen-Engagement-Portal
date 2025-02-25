@@ -103,7 +103,9 @@ CREATE TABLE public.issues (
     issue_type character varying(50) NOT NULL,
     description text NOT NULL,
     status character varying(20) DEFAULT 'Reported'::character varying,
-    reported_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP
+    department text,
+    assigned_worker integer,
+    location text
 );
 
 
@@ -262,7 +264,7 @@ COPY public.citizens (citizen_id, name, email, phone, address) FROM stdin;
 -- Data for Name: issues; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-COPY public.issues (issue_id, citizen_id, issue_type, description, status, reported_at) FROM stdin;
+COPY public.issues (issue_id, citizen_id, issue_type, description, status, department, assigned_worker, location) FROM stdin;
 \.
 
 
@@ -279,6 +281,7 @@ COPY public.tasks (task_id, issue_id, worker_id, assigned_at, status) FROM stdin
 --
 
 COPY public.workers (worker_id, name, email, phone, assigned_tasks) FROM stdin;
+1	abc	abc@gmail.com	9801234567	0
 \.
 
 
@@ -300,7 +303,7 @@ SELECT pg_catalog.setval('public.citizens_citizen_id_seq', 1, false);
 -- Name: issues_issue_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.issues_issue_id_seq', 1, false);
+SELECT pg_catalog.setval('public.issues_issue_id_seq', 3, true);
 
 
 --
@@ -395,6 +398,14 @@ ALTER TABLE ONLY public.workers
 
 ALTER TABLE ONLY public.workers
     ADD CONSTRAINT workers_pkey PRIMARY KEY (worker_id);
+
+
+--
+-- Name: issues assigned_worker; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.issues
+    ADD CONSTRAINT assigned_worker FOREIGN KEY (assigned_worker) REFERENCES public.workers(worker_id);
 
 
 --
