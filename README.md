@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Getting Started with Create React App
 
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
@@ -69,3 +70,9 @@ This section has moved here: [https://facebook.github.io/create-react-app/docs/d
 
 This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
 
+=======
+1. Change .env.example to .env
+2. Restore .sql file
+3. Run npm start in client folder
+4. If server connection is successful, it will be written on terminal.
+>>>>>>> 99127325b81f5a19e98f57852bf464667dd2e1f6
