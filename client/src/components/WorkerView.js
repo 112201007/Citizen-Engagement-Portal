@@ -1,69 +1,83 @@
 import React, { useEffect, useState } from 'react';
 import { Container, Card, ListGroup, Form } from 'react-bootstrap';
 import { useParams } from 'react-router-dom';
-import workerImage from '../assets/worker.jpg';
 
 const WorkerView = () => {
   const { workerId } = useParams(); // Get worker ID from URL
+  const [workerDetails, setWorkerDetails] = useState(null);
   const [tasks, setTasks] = useState([]);
- 
+
+    // Fetch worker details (name, email)
+    const fetchWorkerDetails = () => {
+      fetch(`http://localhost:5000/worker/${workerId}/details`)
+        .then((res) => res.json())
+        .then((data) => setWorkerDetails(data))
+        .catch((err) => console.error('Error fetching worker details:', err));
+    };
   const fetchTasks = () => {
-    fetch(`http://localhost:5000/workers/${workerId}/tasks`)
+    fetch(`http://localhost:5000/worker/${workerId}/tasks`)
       .then((res) => res.json())
+      // .then((data) => setTasks(data))
       .then((data) => {
-        console.log("Fetched tasks:", data);  // Debugging: Check if API is returning data
-        setTasks(data);
+        console.log("data fetched: ",data); // Check the structure of data
+        setTasks(Array.isArray(data) ? data : []); 
       })
       .catch((err) => console.error('Error fetching tasks:', err));
   };
 
+
   // Fetch tasks when component mounts
   useEffect(() => {
+    fetchWorkerDetails();
     fetchTasks();
   }, [workerId]);
         
   // Update task status and refetch tasks
   const handleUpdateStatus = (issueId, newStatus) => {
-      if (!issueId) {
+    if (!issueId) {
         console.error("Error: issueId is undefined");
         return;
      }
       
-      fetch(`http://localhost:5000/workers/${issueId}/update-status`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus }),
-      })
-         .then((res) => res.json())
-         .then(() => {
-            setTasks(tasks.map((task) =>
+     fetch(`http://localhost:5000/worker/${workerId}/issues/${issueId}/update-status`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: newStatus }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        setTasks(prevTasks =>
+          prevTasks.map(task =>
             task.issue_id === issueId ? { ...task, status: newStatus } : task
-          ));
-        })
-        .catch((error) => console.error('Error updating status:', error));
-    };
-      
+          )
+        );
+      })
+      .catch((error) => console.error('Error updating status:', error));
+  };
+  if (!workerDetails) {
+    return <p>Loading worker details...</p>;
+  }
   return (
     <Container className="my-5">
       <Card>
-        {/* <Card.Img variant="top" src={workerImage} alt="Worker View" /> */}
         <Card.Body>
-          <Card.Title>Worker Vieww</Card.Title>
+          <Card.Title>Worker : {workerDetails.email}</Card.Title>
           <h3>Your Assigned Tasks</h3>
           {tasks.length === 0 ? (
             <p>No tasks assigned.</p>
           ) : (
           <ListGroup>
             {tasks.map((task) => (
-              <ListGroup.Item key={task.id}>
-                <strong>Issue:</strong> {task.issue_type}, 
-                <strong>Location:</strong> {task.location}, 
-                <strong>Status:</strong> {task.status}
+              <ListGroup.Item key={task.issue_id}>
+                  <strong>Issue Type:</strong> {task.type_name} <br />
+                  <strong>Location:</strong> {task.location} <br />
+                  <strong>Description:</strong> {task.description} <br />
+                  <strong>Status:</strong> {task.status} <br />
                 <Form.Select
                   value={task.status}
                   onChange={(e) => handleUpdateStatus(task.issue_id, e.target.value)}
                 >
-                  <option value="Assigned">Assigned</option>
+                  {/* <option value="Assigned">Assigned</option> */}
                   <option value="In Progress">In Progress</option>
                   <option value="Completed">Completed</option>
                 </Form.Select>
@@ -78,88 +92,3 @@ const WorkerView = () => {
 };
 
 export default WorkerView;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// import React, { useState } from 'react';
-// import { Container, Card, ListGroup, Form } from 'react-bootstrap';
-// import workerImage from '../assets/worker.jpg';
-
-// const WorkerView = () => {
-//   const [tasks, setTasks] = useState([
-//     { id: 1, issue: 'Pothole', location: 'Main Street', status: 'Assigned' },
-//     { id: 2, issue: 'Garbage', location: 'Park Road', status: 'In Progress' },
-//   ]);
-
-//   const handleUpdateStatus = (id, newStatus) => {
-//     setTasks(
-//       tasks.map((task) =>
-//         task.id === id ? { ...task, status: newStatus } : task
-//       )
-//     );
-//   };
-
-//   return (
-//     <Container className="my-5">
-//       <Card>
-//         {/* <Card.Img variant="top" src={workerImage} alt="Worker View" /> */}
-//         <Card.Body>
-//           <Card.Title>Worker View</Card.Title>
-//           <h3>Your Assigned Tasks</h3>
-//           <ListGroup>
-//             {tasks.map((task) => (
-//               <ListGroup.Item key={task.id}>
-//                 <strong>Issue:</strong> {task.issue}, <strong>Location:</strong> {task.location}, <strong>Status:</strong> {task.status}
-//                 <Form.Select
-//                   value={task.status}
-//                   onChange={(e) => handleUpdateStatus(task.id, e.target.value)}
-//                 >
-//                   <option value="Assigned">Assigned</option>
-//                   <option value="In Progress">In Progress</option>
-//                   <option value="Completed">Completed</option>
-//                 </Form.Select>
-//               </ListGroup.Item>
-//             ))}
-//           </ListGroup>
-//         </Card.Body>
-//       </Card>
-//     </Container>
-//   );
-// };
-
-// export default WorkerView;

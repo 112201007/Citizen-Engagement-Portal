@@ -2,15 +2,43 @@ const express = require('express');
 const pool = require('../config/db'); // Import PostgreSQL connection
 const router = express.Router();
 
+const getWorkerId = async (email) => {
+  try {
+    const result = await pool.query(
+      "SELECT worker_id FROM worker WHERE email = $1 LIMIT 1",
+      [email]
+    );
+    const rows = result.rows; 
+    console.log(rows);
+    return rows.length > 0 ? rows[0].worker_id : null;
+  } catch (error) {
+    console.error("Database Error:", error);
+    return null;
+  }
+};
+  router.post("/get-worker-id", async (req, res) => {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: "Email is required" });
+    }
+  
+    const workerId = await getWorkerId(email);
+    if (workerId) {
+      return res.json({ worker_id: workerId });
+    } else {
+      return res.status(404).json({ error: "Worker not found" });
+    }
+  });
+  module.exports = router;
+
 
 // Get assigned tasks for a specific worker
-router.get('/workers/:workerId/tasks', async (req, res) => {
+router.get('/:workerId/tasks', async (req, res) => {
   const { workerId } = req.params;
   try {
-    // const { workerId } = req.params;
-    // const workerId = parseInt(req.params.workerId, 10);
     const result = await pool.query(
-        'SELECT * FROM issues WHERE assigned_worker = $1',[workerId]
+        // 'SELECT * FROM assignment WHERE worker_id = $1',[workerId]
+        'SELECT * FROM get_worker_tasks($1)', [workerId]
         );
     res.json(result.rows);
   } catch (err) {
@@ -20,111 +48,42 @@ router.get('/workers/:workerId/tasks', async (req, res) => {
 });
 
 // Update task status
-router.put('/workers/:issueId/update-status', async (req, res) => {
-  const { issueId } = req.params;
+router.put('/:workerId/issues/:issueId/update-status', async (req, res) => {
+  const { workerId, issueId } = req.params;
   const { status } = req.body;
+
+
   try {
-    await pool.query('UPDATE issues SET status = $1 WHERE issue_id = $2', [status, issueId]);
-    res.json({ message: 'Status updated successfully' });
+    const result = await pool.query(
+      'SELECT update_issue_status($1, $2, $3) AS message',
+      [issueId, workerId, status]
+    );
+    res.json({ message: result.rows[0].message });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Error updating issue status:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
 module.exports = router;
 
 
+// Get worker details (ID, name, email)
+router.get('/:workerId/details', async (req, res) => {
+  const { workerId } = req.params;
+  try {
+    const result = await pool.query(
+      'SELECT worker_id, name, email FROM worker WHERE worker_id = $1',
+      [workerId]
+    );
 
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Worker not found' });
+    }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// const express = require('express');
-// const pool = require('../config/db'); // Import PostgreSQL connection
-// const router = express.Router();
-
-// // Fetch Assigned Tasks for a Worker
-// router.get("/:workerId/tasks", async (req, res) => {
-//     try {
-//       const { workerId } = req.params;
-//       const result = await pool.query("SELECT * FROM issues WHERE assigned_worker = $1", [workerId]);
-  
-//       if (result.rows.length === 0) {
-//         return res.status(404).json({ error: "No tasks assigned to this worker" });
-//       }
-  
-//       res.json(result.rows);
-//     } catch (err) {
-//       console.error("Error fetching worker tasks:", err.message);
-//       res.status(500).send("Server error");
-//     }
-//   });
-  
-//   // Update Task Status (Worker Reports Completion)
-//   router.put("/:issueId/update-status", async (req, res) => {
-//     try {
-//       // const { issueId, status } = req.body;
-//       const { issueId } = req.params.issueId;
-//       const { status } = req.body;
-
-//       const result = await pool.query(
-//         "UPDATE issues SET status = $1 WHERE issue_id = $2 RETURNING *",
-//         [status, issueId]
-//       );
-  
-//       if (result.rowCount === 0) {
-//         return res.status(404).json({ error: "Issue not found" });
-//       }
-  
-//       res.json({ success: true, message: "Status updated successfully!", issue: result.rows[0] });
-//     } catch (err) {
-//       console.error("Error updating status:", err.message);
-//       res.status(500).send("Server error");
-//     }
-//   });
-  
-//   module.exports = router;
-  
+    res.json(result.rows[0]); // Send worker details
+  } catch (err) {
+    console.error('Error fetching worker details:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});

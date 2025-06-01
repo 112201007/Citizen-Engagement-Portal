@@ -1,24 +1,4 @@
-// const { Pool } = require('pg');
-
-// const pool = new Pool({
-//   user: 'postgres',
-//   host: 'localhost',
-//   database: 'civic_management2',
-//   password: 'your_password',
-//   port: 5432,
-// });
-
-// module.exports = pool;
-
-
-
-
-
-
-
-//P
-
-///Now, app.js will import the database connection instead of handling it directly. in app.js
+////Now, app.js will import the database connection instead of handling it directly. in app.js
 const { Pool } = require("pg");
 require("dotenv").config(); // Load environment variables
 

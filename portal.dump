@@ -1,0 +1,810 @@
+--
+-- PostgreSQL database dump
+--
+
+-- Dumped from database version 17.2 (Ubuntu 17.2-1.pgdg20.04+1)
+-- Dumped by pg_dump version 17.2 (Ubuntu 17.2-1.pgdg20.04+1)
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET transaction_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
+
+--
+-- Name: assign_task(integer, integer, integer); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.assign_task(p_issue_id integer, p_admin_id integer, p_worker_id integer) RETURNS void
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  issue_type INT;
+  worker_type INT;
+BEGIN
+  -- Fetch types
+  SELECT issue_type_id INTO issue_type FROM issues WHERE issue_id = p_issue_id;
+  SELECT issue_type_id INTO worker_type FROM worker WHERE worker_id = p_worker_id;
+
+  -- Enforce type match
+  IF issue_type IS DISTINCT FROM worker_type THEN
+    RAISE EXCEPTION 'Worker % cannot handle issue type %', p_worker_id, issue_type;
+  END IF;
+
+  -- Insert assignment
+  INSERT INTO assignment(issue_id, admin_id, worker_id, location)
+  VALUES (
+    p_issue_id,
+    p_admin_id,
+    p_worker_id,
+    (SELECT location FROM issues WHERE issue_id = p_issue_id)
+  );
+
+  -- Update issue status
+  UPDATE issues
+  SET status = 'In Progress'
+  WHERE issue_id = p_issue_id;
+END;
+$$;
+
+
+ALTER FUNCTION public.assign_task(p_issue_id integer, p_admin_id integer, p_worker_id integer) OWNER TO postgres;
+
+--
+-- Name: auto_assign_tasks(integer); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.auto_assign_tasks(p_admin_id integer) RETURNS void
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  rec RECORD;
+  sel_worker INT;
+BEGIN
+  FOR rec IN SELECT issue_id, issue_type_id FROM issues WHERE status = 'Reported'
+  LOOP
+    -- pick first matching worker for this issue type
+    SELECT worker_id INTO sel_worker
+    FROM worker
+    WHERE issue_type_id = rec.issue_type_id
+    ORDER BY worker_id
+    LIMIT 1;
+
+    IF sel_worker IS NOT NULL THEN
+      PERFORM assign_task(rec.issue_id, p_admin_id, sel_worker);
+    END IF;
+  END LOOP;
+END;
+$$;
+
+
+ALTER FUNCTION public.auto_assign_tasks(p_admin_id integer) OWNER TO postgres;
+
+--
+-- Name: get_citizen_issues(integer); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.get_citizen_issues(citizen_id_param integer) RETURNS TABLE(issue_id integer, issue_type text, description text, location text, status text, assigned_worker text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY 
+    SELECT 
+        civ.issue_id, 
+        civ.type_name::TEXT,  -- Explicitly cast VARCHAR to TEXT
+        civ.description::TEXT, 
+        civ.location::TEXT, 
+        civ.status::TEXT, 
+        civ.assigned_worker::TEXT
+    FROM citizen_issues_view civ
+    WHERE civ.citizen_id = citizen_id_param;
+END;
+$$;
+
+
+ALTER FUNCTION public.get_citizen_issues(citizen_id_param integer) OWNER TO postgres;
+
+--
+-- Name: get_worker_tasks(integer); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.get_worker_tasks(p_worker_id integer) RETURNS TABLE(issue_id integer, type_name character varying, location character varying, description text, status character varying)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        issue_id,
+        type_name,
+        location,
+        description,
+        status
+    FROM worker_tasks_view
+    WHERE worker_id = p_worker_id;
+END;
+$$;
+
+
+ALTER FUNCTION public.get_worker_tasks(p_worker_id integer) OWNER TO postgres;
+
+--
+-- Name: prevent_duplicate_assignment(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.prevent_duplicate_assignment() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF EXISTS(SELECT 1 FROM assignment WHERE issue_id = NEW.issue_id) THEN
+    RAISE EXCEPTION 'Issue % already assigned', NEW.issue_id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION public.prevent_duplicate_assignment() OWNER TO postgres;
+
+--
+-- Name: report_issue(integer, integer, text, text); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.report_issue(citizen_id_param integer, issue_type_id_param integer, description_param text, location_param text) RETURNS void
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    INSERT INTO issues (citizen_id, issue_type_id, description, status, location)
+    VALUES (citizen_id_param, issue_type_id_param, description_param, 'Pending', location_param);
+END;
+$$;
+
+
+ALTER FUNCTION public.report_issue(citizen_id_param integer, issue_type_id_param integer, description_param text, location_param text) OWNER TO postgres;
+
+--
+-- Name: set_default_issue_status(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.set_default_issue_status() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NEW.status IS NULL THEN
+    NEW.status := 'Reported';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION public.set_default_issue_status() OWNER TO postgres;
+
+--
+-- Name: update_issue_status(integer, integer, character varying); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.update_issue_status(p_issue_id integer, p_worker_id integer, p_new_status character varying) RETURNS text
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    assigned_worker INT;
+BEGIN
+    -- Check if the worker is assigned to the issue
+    SELECT worker_id INTO assigned_worker 
+    FROM assignment 
+    WHERE issue_id = p_issue_id;
+
+    IF assigned_worker IS NULL THEN
+        RETURN 'Error: Issue not assigned to any worker.';
+    ELSIF assigned_worker != p_worker_id THEN
+        RETURN 'Error: Worker is not assigned to this issue.';
+    END IF;
+
+    -- Update the status in the Issues table
+    UPDATE issues 
+    SET status = p_new_status 
+    WHERE issue_id = p_issue_id;
+
+    RETURN 'Issue status updated successfully';
+END;
+$$;
+
+
+ALTER FUNCTION public.update_issue_status(p_issue_id integer, p_worker_id integer, p_new_status character varying) OWNER TO postgres;
+
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- Name: admin; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.admin (
+    admin_id integer NOT NULL,
+    name character varying(255) NOT NULL,
+    email character varying(255) NOT NULL,
+    phone character varying(20) NOT NULL
+);
+
+
+ALTER TABLE public.admin OWNER TO postgres;
+
+--
+-- Name: admin_admin_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.admin_admin_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.admin_admin_id_seq OWNER TO postgres;
+
+--
+-- Name: admin_admin_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.admin_admin_id_seq OWNED BY public.admin.admin_id;
+
+
+--
+-- Name: assignment; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.assignment (
+    issue_id integer NOT NULL,
+    admin_id integer NOT NULL,
+    worker_id integer NOT NULL,
+    location character varying(255) NOT NULL
+);
+
+
+ALTER TABLE public.assignment OWNER TO postgres;
+
+--
+-- Name: issue_type; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.issue_type (
+    type_id integer NOT NULL,
+    type_name character varying(100) NOT NULL
+);
+
+
+ALTER TABLE public.issue_type OWNER TO postgres;
+
+--
+-- Name: issues; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.issues (
+    issue_id integer NOT NULL,
+    citizen_id integer NOT NULL,
+    issue_type_id integer NOT NULL,
+    status character varying(50) NOT NULL,
+    description text NOT NULL,
+    location character varying
+);
+
+
+ALTER TABLE public.issues OWNER TO postgres;
+
+--
+-- Name: worker; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.worker (
+    worker_id integer NOT NULL,
+    name character varying(255) NOT NULL,
+    email character varying(255) NOT NULL,
+    phone character varying(20) NOT NULL,
+    issue_type_id integer
+);
+
+
+ALTER TABLE public.worker OWNER TO postgres;
+
+--
+-- Name: admin_assignments_view; Type: VIEW; Schema: public; Owner: postgres
+--
+
+CREATE VIEW public.admin_assignments_view AS
+ SELECT i.issue_id,
+    t.type_name,
+    i.description,
+    i.location,
+    i.status,
+    w.name AS assigned_worker
+   FROM (((public.issues i
+     JOIN public.issue_type t ON ((i.issue_type_id = t.type_id)))
+     JOIN public.assignment a ON ((i.issue_id = a.issue_id)))
+     JOIN public.worker w ON ((a.worker_id = w.worker_id)));
+
+
+ALTER VIEW public.admin_assignments_view OWNER TO postgres;
+
+--
+-- Name: citizens; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.citizens (
+    citizen_id integer NOT NULL,
+    name character varying(255) NOT NULL,
+    email character varying(255) NOT NULL,
+    phone character varying(20) NOT NULL,
+    address text NOT NULL
+);
+
+
+ALTER TABLE public.citizens OWNER TO postgres;
+
+--
+-- Name: citizen_issues_view; Type: VIEW; Schema: public; Owner: postgres
+--
+
+CREATE VIEW public.citizen_issues_view AS
+ SELECT DISTINCT ON (i.issue_id) i.issue_id,
+    c.citizen_id,
+    t.type_name,
+    i.description,
+    i.location,
+    i.status,
+    COALESCE(w.name, 'Not Assigned'::character varying) AS assigned_worker
+   FROM ((((public.issues i
+     JOIN public.citizens c ON ((i.citizen_id = c.citizen_id)))
+     JOIN public.issue_type t ON ((i.issue_type_id = t.type_id)))
+     LEFT JOIN public.assignment a ON ((i.issue_id = a.issue_id)))
+     LEFT JOIN public.worker w ON ((a.worker_id = w.worker_id)));
+
+
+ALTER VIEW public.citizen_issues_view OWNER TO postgres;
+
+--
+-- Name: citizens_citizen_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.citizens_citizen_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.citizens_citizen_id_seq OWNER TO postgres;
+
+--
+-- Name: citizens_citizen_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.citizens_citizen_id_seq OWNED BY public.citizens.citizen_id;
+
+
+--
+-- Name: issue_type_type_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.issue_type_type_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.issue_type_type_id_seq OWNER TO postgres;
+
+--
+-- Name: issue_type_type_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.issue_type_type_id_seq OWNED BY public.issue_type.type_id;
+
+
+--
+-- Name: issues_issue_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.issues_issue_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.issues_issue_id_seq OWNER TO postgres;
+
+--
+-- Name: issues_issue_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.issues_issue_id_seq OWNED BY public.issues.issue_id;
+
+
+--
+-- Name: unassigned_issues_view; Type: VIEW; Schema: public; Owner: postgres
+--
+
+CREATE VIEW public.unassigned_issues_view AS
+ SELECT i.issue_id,
+    i.description,
+    i.location,
+    i.status,
+    t.type_name
+   FROM ((public.issues i
+     JOIN public.issue_type t ON ((i.issue_type_id = t.type_id)))
+     LEFT JOIN public.assignment a ON ((i.issue_id = a.issue_id)))
+  WHERE (a.issue_id IS NULL);
+
+
+ALTER VIEW public.unassigned_issues_view OWNER TO postgres;
+
+--
+-- Name: worker_tasks_view; Type: VIEW; Schema: public; Owner: postgres
+--
+
+CREATE VIEW public.worker_tasks_view AS
+ SELECT a.worker_id,
+    i.issue_id,
+    it.type_name,
+    a.location,
+    i.description,
+    i.status
+   FROM ((public.assignment a
+     JOIN public.issues i ON ((a.issue_id = i.issue_id)))
+     JOIN public.issue_type it ON ((i.issue_type_id = it.type_id)));
+
+
+ALTER VIEW public.worker_tasks_view OWNER TO postgres;
+
+--
+-- Name: worker_worker_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.worker_worker_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.worker_worker_id_seq OWNER TO postgres;
+
+--
+-- Name: worker_worker_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.worker_worker_id_seq OWNED BY public.worker.worker_id;
+
+
+--
+-- Name: admin admin_id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.admin ALTER COLUMN admin_id SET DEFAULT nextval('public.admin_admin_id_seq'::regclass);
+
+
+--
+-- Name: citizens citizen_id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.citizens ALTER COLUMN citizen_id SET DEFAULT nextval('public.citizens_citizen_id_seq'::regclass);
+
+
+--
+-- Name: issue_type type_id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.issue_type ALTER COLUMN type_id SET DEFAULT nextval('public.issue_type_type_id_seq'::regclass);
+
+
+--
+-- Name: issues issue_id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.issues ALTER COLUMN issue_id SET DEFAULT nextval('public.issues_issue_id_seq'::regclass);
+
+
+--
+-- Name: worker worker_id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.worker ALTER COLUMN worker_id SET DEFAULT nextval('public.worker_worker_id_seq'::regclass);
+
+
+--
+-- Data for Name: admin; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.admin (admin_id, name, email, phone) FROM stdin;
+1	Admin One	admin1@example.com	9000000001
+2	Admin Two	admin2@example.com	9000000002
+3	Admin Three	admin3@example.com	9000000003
+4	Admin Four	admin4@example.com	9000000004
+5	Admin Five	admin5@example.com	9000000005
+6	Admin Six	admin6@example.com	9000000006
+7	Admin Seven	admin7@example.com	9000000007
+8	Admin Eight	admin8@example.com	9000000008
+\.
+
+
+--
+-- Data for Name: assignment; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.assignment (issue_id, admin_id, worker_id, location) FROM stdin;
+31	2	3	Vani nagar
+32	3	1	Avantika park
+30	1	5	wert
+\.
+
+
+--
+-- Data for Name: citizens; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.citizens (citizen_id, name, email, phone, address) FROM stdin;
+1	Alice Johnson	alice@example.com	1234567890	123 Elm Street
+2	Bob Smith	bob@example.com	2345678901	456 Oak Avenue
+3	Charlie Davis	charlie@example.com	3456789012	789 Pine Road
+4	Diana White	diana@example.com	4567890123	101 Maple Street
+5	Ethan Brown	ethan@example.com	5678901234	202 Birch Lane
+6	Fiona Green	fiona@example.com	6789012345	303 Cedar Drive
+7	George Harris	george@example.com	7890123456	404 Spruce Court
+8	Hannah Lee	hannah@example.com	8901234567	505 Walnut Blvd
+\.
+
+
+--
+-- Data for Name: issue_type; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.issue_type (type_id, type_name) FROM stdin;
+1	Road Repair
+2	Water Supply
+3	Electricity
+4	Garbage Collection
+5	Public Transport
+6	Street Lighting
+7	Drainage
+8	Illegal Construction
+9	Extra
+\.
+
+
+--
+-- Data for Name: issues; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.issues (issue_id, citizen_id, issue_type_id, status, description, location) FROM stdin;
+33	1	4	Pending	No collection done since 2 weeks	Meera Road
+34	3	5	Pending	Broken seats	Bus Parking, Stadium
+35	3	8	Pending	Land belongs to government	Mahavir Ground
+31	2	2	In Progress	Water blockage	Vani nagar
+32	2	3	In Progress	Connections loose	Avantika park
+30	1	1	In Progress	road block	wert
+\.
+
+
+--
+-- Data for Name: worker; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.worker (worker_id, name, email, phone, issue_type_id) FROM stdin;
+3	Worker Three	worker3@example.com	8000000003	2
+4	Worker Four	worker4@example.com	8000000004	2
+8	Worker Eight	worker8@example.com	8000000008	2
+2	Worker Two	worker2@example.com	8000000002	1
+5	Worker Five	worker5@example.com	8000000005	1
+7	Worker Seven	worker7@example.com	8000000007	1
+1	Worker One	worker1@example.com	8000000001	3
+6	Worker Six	worker6@example.com	8000000006	3
+\.
+
+
+--
+-- Name: admin_admin_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.admin_admin_id_seq', 9, true);
+
+
+--
+-- Name: citizens_citizen_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.citizens_citizen_id_seq', 9, true);
+
+
+--
+-- Name: issue_type_type_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.issue_type_type_id_seq', 9, true);
+
+
+--
+-- Name: issues_issue_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.issues_issue_id_seq', 35, true);
+
+
+--
+-- Name: worker_worker_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.worker_worker_id_seq', 9, true);
+
+
+--
+-- Name: admin admin_email_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.admin
+    ADD CONSTRAINT admin_email_key UNIQUE (email);
+
+
+--
+-- Name: admin admin_phone_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.admin
+    ADD CONSTRAINT admin_phone_key UNIQUE (phone);
+
+
+--
+-- Name: admin admin_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.admin
+    ADD CONSTRAINT admin_pkey PRIMARY KEY (admin_id);
+
+
+--
+-- Name: citizens citizens_email_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.citizens
+    ADD CONSTRAINT citizens_email_key UNIQUE (email);
+
+
+--
+-- Name: citizens citizens_phone_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.citizens
+    ADD CONSTRAINT citizens_phone_key UNIQUE (phone);
+
+
+--
+-- Name: citizens citizens_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.citizens
+    ADD CONSTRAINT citizens_pkey PRIMARY KEY (citizen_id);
+
+
+--
+-- Name: issue_type issue_type_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.issue_type
+    ADD CONSTRAINT issue_type_pkey PRIMARY KEY (type_id);
+
+
+--
+-- Name: issue_type issue_type_type_name_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.issue_type
+    ADD CONSTRAINT issue_type_type_name_key UNIQUE (type_name);
+
+
+--
+-- Name: issues issues_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.issues
+    ADD CONSTRAINT issues_pkey PRIMARY KEY (issue_id);
+
+
+--
+-- Name: worker worker_email_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.worker
+    ADD CONSTRAINT worker_email_key UNIQUE (email);
+
+
+--
+-- Name: worker worker_phone_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.worker
+    ADD CONSTRAINT worker_phone_key UNIQUE (phone);
+
+
+--
+-- Name: worker worker_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.worker
+    ADD CONSTRAINT worker_pkey PRIMARY KEY (worker_id);
+
+
+--
+-- Name: issues trg_issue_default_status; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trg_issue_default_status BEFORE INSERT ON public.issues FOR EACH ROW EXECUTE FUNCTION public.set_default_issue_status();
+
+
+--
+-- Name: assignment trg_prevent_duplicate_assignment; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trg_prevent_duplicate_assignment BEFORE INSERT ON public.assignment FOR EACH ROW EXECUTE FUNCTION public.prevent_duplicate_assignment();
+
+
+--
+-- Name: assignment assignment_admin_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.assignment
+    ADD CONSTRAINT assignment_admin_id_fkey FOREIGN KEY (admin_id) REFERENCES public.admin(admin_id) ON DELETE CASCADE;
+
+
+--
+-- Name: assignment assignment_issue_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.assignment
+    ADD CONSTRAINT assignment_issue_id_fkey FOREIGN KEY (issue_id) REFERENCES public.issues(issue_id) ON DELETE CASCADE;
+
+
+--
+-- Name: assignment assignment_worker_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.assignment
+    ADD CONSTRAINT assignment_worker_id_fkey FOREIGN KEY (worker_id) REFERENCES public.worker(worker_id) ON DELETE CASCADE;
+
+
+--
+-- Name: issues issues_citizen_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.issues
+    ADD CONSTRAINT issues_citizen_id_fkey FOREIGN KEY (citizen_id) REFERENCES public.citizens(citizen_id) ON DELETE CASCADE;
+
+
+--
+-- Name: issues issues_issue_type_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.issues
+    ADD CONSTRAINT issues_issue_type_id_fkey FOREIGN KEY (issue_type_id) REFERENCES public.issue_type(type_id) ON DELETE CASCADE;
+
+
+--
+-- PostgreSQL database dump complete
+--
+

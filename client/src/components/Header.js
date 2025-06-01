@@ -7,25 +7,12 @@ const Header = () => {
     <Navbar bg="dark" variant="dark" expand="lg">
       <Container>
         <Navbar.Brand as={Link} to="/">
-          Civic Management System
+          Login
+        </Navbar.Brand>
+        <Navbar.Brand as={Link} to="/register">
+          Register
         </Navbar.Brand>
         <Navbar.Toggle aria-controls="basic-navbar-nav" />
-        <Navbar.Collapse id="basic-navbar-nav">
-          <Nav className="ms-auto">
-            <Nav.Link as={Link} to="/citizen">
-              Citizen View
-            </Nav.Link>
-            <Nav.Link as={Link} to="/admin">
-              Admin View
-            </Nav.Link>
-            <Nav.Link as={Link} to="/worker">
-              Worker View
-            </Nav.Link>
-            <Nav.Link as={Link} to="/statistics">
-              Issue Statistics
-            </Nav.Link>
-          </Nav>
-        </Navbar.Collapse>
       </Container>
     </Navbar>
   );

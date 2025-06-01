@@ -7,7 +7,7 @@ const Footer = () => {
       <Container>
         <Row>
           <Col className="text-center">
-            <p>&copy; 2023 Civic Management System. All rights reserved.</p>
+            <p>Civic Management System</p>
             <p>Contact: info@civicmanagement.com</p>
           </Col>
         </Row>

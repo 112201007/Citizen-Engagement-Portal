@@ -1,5 +1,0 @@
-DB_USER=postgres
-DB_HOST=localhost
-DB_NAME=portal
-DB_PASSWORD=''
-DB_PORT=5432

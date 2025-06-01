@@ -5,6 +5,8 @@ import Footer from './components/Footer';
 import CitizenView from './components/CitizenView';
 import AdminView from './components/AdminView';
 import WorkerView from './components/WorkerView';
+import RegisterView from './components/RegisterView';
+
 import IssueStatistics from './components/IssueStatistics';
 import Login from './components/Login';
 import 'bootstrap/dist/css/bootstrap.min.css';
@@ -19,16 +21,20 @@ const App = () => {
         <Header />
         <main>
           <Routes>
-            {/* <Route path="/" element={<Login />} /> */}
+      
             <Route path="/" element={<Login setUser={setUser} />} />
 
-            <Route path="/citizen" element={<CitizenView />} />
-            <Route path="/admin" element={<AdminView />} />
+            <Route path="/citizen/:citizenId" element={<CitizenView />} />
+            <Route path="/admin/:adminId" element={<AdminView />} />
             
             {/* <Route path="/worker" element={<WorkerView />} /> */}
             <Route path="/worker/:workerId" element={<WorkerView />} />
+            <Route path="/admin/:adminId" element={<AdminView />} />
 
             <Route path="/statistics" element={<IssueStatistics />} />
+            <Route path="/register" element={<RegisterView />} /> {/* ✅ new line */}
+            
+            
           </Routes>
         </main>
         <Footer />
